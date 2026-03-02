@@ -5,11 +5,16 @@ import { App, TFile, TAbstractFile, Notice, normalizePath } from "obsidian";
 import { BrainApi } from "./api";
 import { BrainSyncSettings, NoteChange, NoteStreamEvent } from "./types";
 
+/** How long (ms) after a push completes to suppress SSE echoes for that path. */
+const ECHO_COOLDOWN_MS = 5000;
+
 export class SyncEngine {
 	private debounceTimers: Map<string, ReturnType<typeof setTimeout>> =
 		new Map();
 	private ignorePatterns: string[] = [];
 	private pushing: Set<string> = new Set();
+	private recentlyPushed: Map<string, ReturnType<typeof setTimeout>> =
+		new Map();
 	private pulling: boolean = false;
 	private lastSync: string = "";
 
@@ -133,7 +138,26 @@ export class SyncEngine {
 			console.error(`Brain Sync: failed to push ${file.path}`, e);
 		} finally {
 			this.pushing.delete(file.path);
+			// Keep path suppressed for a cooldown period after push completes.
+			// SSE events often arrive after the push finishes, and without this
+			// the echo suppression in handleStreamEvent would miss them.
+			this.markRecentlyPushed(file.path);
 		}
+	}
+
+	/** Suppress SSE echoes for a path for ECHO_COOLDOWN_MS after push. */
+	private markRecentlyPushed(path: string): void {
+		const existing = this.recentlyPushed.get(path);
+		if (existing) clearTimeout(existing);
+		const timer = setTimeout(() => {
+			this.recentlyPushed.delete(path);
+		}, ECHO_COOLDOWN_MS);
+		this.recentlyPushed.set(path, timer);
+	}
+
+	/** Check if a path was recently pushed (for echo suppression). */
+	isRecentlyPushed(path: string): boolean {
+		return this.recentlyPushed.has(path);
 	}
 
 	// --- Pull: brain-api → local vault ---
@@ -174,7 +198,9 @@ export class SyncEngine {
 		if (this.shouldIgnore(event.path)) return;
 
 		// Echo suppression — skip events for notes we're currently pushing
+		// or have recently finished pushing (SSE events arrive after push completes)
 		if (this.pushing.has(event.path)) return;
+		if (this.recentlyPushed.has(event.path)) return;
 
 		if (event.event_type === "delete") {
 			const normalized = normalizePath(event.path);
@@ -312,11 +338,15 @@ export class SyncEngine {
 		return pushed;
 	}
 
-	/** Cancel all pending debounce timers. */
+	/** Cancel all pending debounce and cooldown timers. */
 	destroy(): void {
 		for (const timer of this.debounceTimers.values()) {
 			clearTimeout(timer);
 		}
 		this.debounceTimers.clear();
+		for (const timer of this.recentlyPushed.values()) {
+			clearTimeout(timer);
+		}
+		this.recentlyPushed.clear();
 	}
 }

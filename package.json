@@ -1,6 +1,6 @@
 {
   "name": "brain-obsidian-sync",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Bidirectional sync between Obsidian and brain-api",
   "main": "main.js",
   "scripts": {
