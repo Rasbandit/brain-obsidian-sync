@@ -3,7 +3,7 @@
  */
 import { App, TFile, TAbstractFile, Notice, normalizePath } from "obsidian";
 import { BrainApi } from "./api";
-import { BrainSyncSettings, NoteChange } from "./types";
+import { BrainSyncSettings, NoteChange, NoteStreamEvent } from "./types";
 
 export class SyncEngine {
 	private debounceTimers: Map<string, ReturnType<typeof setTimeout>> =
@@ -169,8 +169,43 @@ export class SyncEngine {
 		}
 	}
 
+	/** Handle an SSE stream event (upsert or delete). */
+	async handleStreamEvent(event: NoteStreamEvent): Promise<void> {
+		if (this.shouldIgnore(event.path)) return;
+
+		// Echo suppression — skip events for notes we're currently pushing
+		if (this.pushing.has(event.path)) return;
+
+		if (event.event_type === "delete") {
+			const normalized = normalizePath(event.path);
+			const existing = this.app.vault.getAbstractFileByPath(normalized);
+			if (existing && existing instanceof TFile) {
+				await this.app.vault.trash(existing, true);
+			}
+			return;
+		}
+
+		if (event.event_type === "upsert") {
+			try {
+				const note = await this.api.getNote(event.path);
+				await this.applyChange({
+					path: note.path,
+					title: note.title,
+					content: note.content,
+					folder: note.folder,
+					tags: note.tags,
+					mtime: note.mtime,
+					updated_at: note.updated_at,
+					deleted: false,
+				});
+			} catch (e) {
+				console.error(`Brain Sync: failed to fetch note for SSE event ${event.path}`, e);
+			}
+		}
+	}
+
 	/** Apply a single remote change to the vault. */
-	private async applyChange(change: NoteChange): Promise<void> {
+	async applyChange(change: NoteChange): Promise<void> {
 		if (this.shouldIgnore(change.path)) return;
 
 		const normalized = normalizePath(change.path);

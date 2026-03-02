@@ -77,6 +77,18 @@ export class BrainSyncSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName("Live sync (SSE)")
+			.setDesc("Receive remote changes in near real-time via Server-Sent Events. When off, uses interval polling.")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.liveSyncEnabled)
+					.onChange(async (value) => {
+						this.plugin.settings.liveSyncEnabled = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
 			.setName("Ignore patterns")
 			.setDesc("Paths to skip (one per line). Folder patterns end with /")
 			.addTextArea((text) =>

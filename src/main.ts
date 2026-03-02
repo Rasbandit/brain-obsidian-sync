@@ -9,6 +9,7 @@ import { BrainApi } from "./api";
 import { BrainSyncSettings, DEFAULT_SETTINGS } from "./types";
 import { SyncEngine } from "./sync";
 import { BrainSyncSettingTab } from "./settings";
+import { NoteStream } from "./stream";
 
 interface PluginData {
 	settings: BrainSyncSettings;
@@ -20,6 +21,8 @@ export default class BrainSyncPlugin extends Plugin {
 	api: BrainApi = new BrainApi("", "");
 	syncEngine: SyncEngine = null!;
 	private syncInterval: ReturnType<typeof setInterval> | null = null;
+	noteStream: NoteStream | null = null;
+	private statusBarEl: HTMLElement | null = null;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -92,6 +95,13 @@ export default class BrainSyncPlugin extends Plugin {
 		// Start periodic sync if configured
 		this.startSyncInterval();
 
+		// Status bar
+		this.statusBarEl = this.addStatusBarItem();
+		this.statusBarEl.setText("Brain: ready");
+
+		// SSE live sync
+		this.setupNoteStream();
+
 		// Initial sync on startup (after workspace is ready)
 		this.app.workspace.onLayoutReady(async () => {
 			if (this.settings.apiUrl && this.settings.apiKey) {
@@ -108,14 +118,11 @@ export default class BrainSyncPlugin extends Plugin {
 				}
 			}
 		});
-
-		// Status bar
-		const statusBar = this.addStatusBarItem();
-		statusBar.setText("Brain: ready");
 	}
 
 	onunload(): void {
 		this.syncEngine?.destroy();
+		this.noteStream?.disconnect();
 		if (this.syncInterval) {
 			clearInterval(this.syncInterval);
 			this.syncInterval = null;
@@ -135,6 +142,7 @@ export default class BrainSyncPlugin extends Plugin {
 		this.api.updateConfig(this.settings.apiUrl, this.settings.apiKey);
 		this.syncEngine.updateSettings(this.settings);
 		this.startSyncInterval();
+		this.setupNoteStream();
 		await this.savePluginData(this.syncEngine.getLastSync());
 	}
 
@@ -143,6 +151,38 @@ export default class BrainSyncPlugin extends Plugin {
 			settings: this.settings,
 			lastSync,
 		} as PluginData);
+	}
+
+	setupNoteStream(): void {
+		// Disconnect existing stream
+		this.noteStream?.disconnect();
+		this.noteStream = null;
+
+		const { apiUrl, apiKey, liveSyncEnabled } = this.settings;
+		if (!liveSyncEnabled || !apiUrl || !apiKey) {
+			if (this.statusBarEl) this.statusBarEl.setText("Brain: ready");
+			return;
+		}
+
+		this.noteStream = new NoteStream(apiUrl, apiKey);
+
+		this.noteStream.onEvent = (event) => {
+			this.syncEngine.handleStreamEvent(event);
+		};
+
+		this.noteStream.onStatusChange = (connected) => {
+			if (this.statusBarEl) {
+				this.statusBarEl.setText(connected ? "Brain: live" : "Brain: ready");
+			}
+			// Catch-up pull on reconnect to cover missed events
+			if (connected) {
+				this.syncEngine.pull().catch((e) => {
+					console.error("Brain Sync: catch-up pull failed", e);
+				});
+			}
+		};
+
+		this.noteStream.connect();
 	}
 
 	private startSyncInterval(): void {

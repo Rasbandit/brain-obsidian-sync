@@ -8,6 +8,16 @@ const mockApi = {
 	pushNote: jest.fn().mockResolvedValue({ note: {}, chunks_indexed: 1 }),
 	getChanges: jest.fn().mockResolvedValue({ changes: [], server_time: "2026-01-01T00:00:00Z" }),
 	deleteNote: jest.fn().mockResolvedValue({ deleted: true, path: "" }),
+	getNote: jest.fn().mockResolvedValue({
+		path: "Notes/Remote.md",
+		title: "Remote Note",
+		content: "# Remote\n\nFrom SSE",
+		folder: "Notes",
+		tags: [],
+		mtime: 1709345678,
+		created_at: "2026-03-01T12:00:00Z",
+		updated_at: "2026-03-01T12:00:00Z",
+	}),
 	health: jest.fn().mockResolvedValue(true),
 } as unknown as BrainApi;
 
@@ -232,6 +242,92 @@ describe("SyncEngine.pull", () => {
 
 		expect(mockApp.vault.trash).toHaveBeenCalledWith(existingFile, true);
 	});
+});
+
+describe("SyncEngine.handleStreamEvent", () => {
+	test("upsert event fetches note and applies change", async () => {
+		const engine = createEngine();
+
+		(mockApi.getNote as jest.Mock).mockResolvedValueOnce({
+			path: "Notes/SSE.md",
+			title: "SSE Note",
+			content: "# SSE\n\nCreated via MCP",
+			folder: "Notes",
+			tags: [],
+			mtime: 1709345678,
+			created_at: "2026-03-01T12:00:00Z",
+			updated_at: "2026-03-01T12:00:00Z",
+		});
+
+		await engine.handleStreamEvent({
+			event_type: "upsert",
+			path: "Notes/SSE.md",
+			timestamp: 1709345678,
+		});
+
+		expect(mockApi.getNote).toHaveBeenCalledWith("Notes/SSE.md");
+		expect(mockApp.vault.create).toHaveBeenCalledWith(
+			"Notes/SSE.md",
+			"# SSE\n\nCreated via MCP",
+		);
+	});
+
+	test("delete event trashes local file", async () => {
+		const engine = createEngine();
+		const existingFile = new TFile("Notes/ToRemove.md");
+		(mockApp.vault.getAbstractFileByPath as jest.Mock).mockReturnValueOnce(existingFile);
+
+		await engine.handleStreamEvent({
+			event_type: "delete",
+			path: "Notes/ToRemove.md",
+			timestamp: 1709345678,
+		});
+
+		expect(mockApp.vault.trash).toHaveBeenCalledWith(existingFile, true);
+		expect(mockApi.getNote).not.toHaveBeenCalled();
+	});
+
+	test("ignores events for ignored paths", async () => {
+		const engine = createEngine();
+
+		await engine.handleStreamEvent({
+			event_type: "upsert",
+			path: ".obsidian/workspace.md",
+			timestamp: 1709345678,
+		});
+
+		expect(mockApi.getNote).not.toHaveBeenCalled();
+		expect(mockApp.vault.create).not.toHaveBeenCalled();
+	});
+
+	test("skips events for paths currently being pushed (echo suppression)", async () => {
+		// Use a slow pushNote to keep the path in the pushing set
+		(mockApi.pushNote as jest.Mock).mockImplementation(
+			() => new Promise((r) => setTimeout(r, 500)),
+		);
+
+		const engine = createEngine({ debounceMs: 10 });
+		const file = new TFile("Notes/Active.md", Date.now());
+
+		// Trigger push (debounce fires after 10ms, pushFile starts)
+		engine.handleModify(file);
+
+		// Wait for debounce to fire but not for push to complete
+		await new Promise((r) => setTimeout(r, 50));
+
+		// Now the file is in the pushing set — SSE event should be suppressed
+		await engine.handleStreamEvent({
+			event_type: "upsert",
+			path: "Notes/Active.md",
+			timestamp: Date.now(),
+		});
+
+		// getNote should NOT have been called (echo suppression)
+		expect(mockApi.getNote).not.toHaveBeenCalled();
+
+		// Wait for push to finish
+		await new Promise((r) => setTimeout(r, 500));
+	}, 10000);
 });
 
 describe("SyncEngine.destroy", () => {

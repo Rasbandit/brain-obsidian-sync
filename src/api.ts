@@ -4,7 +4,7 @@
  * Uses Obsidian's requestUrl() which bypasses CORS and works on mobile.
  */
 import { requestUrl, RequestUrlResponse } from "obsidian";
-import { ChangesResponse, DeleteResponse, NoteResponse } from "./types";
+import { ChangesResponse, DeleteResponse, NoteDetail, NoteResponse } from "./types";
 
 export class BrainApi {
 	constructor(
@@ -71,6 +71,13 @@ export class BrainApi {
 			`/notes/changes?since=${encoded}`,
 		);
 		return resp.json as ChangesResponse;
+	}
+
+	/** Get full note by path. */
+	async getNote(path: string): Promise<NoteDetail> {
+		const encoded = encodeURIComponent(path);
+		const resp = await this.request("GET", `/notes/${encoded}`);
+		return resp.json as NoteDetail;
 	}
 
 	/** Delete a note. */
