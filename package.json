@@ -1,6 +1,6 @@
 {
   "name": "engram-obsidian-sync",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Bidirectional sync between Obsidian and Engram",
   "main": "main.js",
   "scripts": {
