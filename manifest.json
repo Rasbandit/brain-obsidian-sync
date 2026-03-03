@@ -1,9 +1,9 @@
 {
-  "id": "brain-sync",
-  "name": "Brain Sync",
+  "id": "engram-sync",
+  "name": "Engram Sync",
   "version": "0.2.2",
   "minAppVersion": "1.0.0",
-  "description": "Bidirectional sync with brain-api — push notes for AI search, pull MCP-created notes back.",
+  "description": "Bidirectional sync with Engram — push notes for AI search, pull MCP-created notes back.",
   "author": "Rasbandit",
   "isDesktopOnly": false
 }

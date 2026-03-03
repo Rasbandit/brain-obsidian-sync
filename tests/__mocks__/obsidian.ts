@@ -4,11 +4,13 @@ export class TFile {
 	path: string;
 	extension: string;
 	stat: { mtime: number; ctime: number; size: number };
+	basename: string;
 
-	constructor(path: string, mtime: number = Date.now()) {
+	constructor(path: string, mtime: number = Date.now(), size: number = 100) {
 		this.path = path;
 		this.extension = path.split(".").pop() || "";
-		this.stat = { mtime, ctime: mtime, size: 100 };
+		this.basename = path.split("/").pop()?.replace(/\.[^.]+$/, "") || "";
+		this.stat = { mtime, ctime: mtime, size };
 	}
 }
 
@@ -57,6 +59,28 @@ export function normalizePath(path: string): string {
 
 export async function requestUrl(_opts: any): Promise<any> {
 	return { status: 200, json: {} };
+}
+
+export class Modal {
+	app: any;
+	contentEl: any = {
+		empty: () => {},
+		createEl: (_tag: string, _opts?: any) => ({
+			setText: () => {},
+			style: {},
+		}),
+		createDiv: (_opts?: any) => ({
+			createEl: (_tag: string, _opts2?: any) => ({
+				setText: () => {},
+				addEventListener: () => {},
+				style: {},
+			}),
+			style: {},
+		}),
+	};
+	constructor(app: any) { this.app = app; }
+	open(): void {}
+	close(): void {}
 }
 
 export class App {}

@@ -1,26 +1,26 @@
 # CLAUDE.md
 
-Obsidian plugin for bidirectional sync with brain-api. This is Phase 2 of the Brain project.
+Obsidian plugin for bidirectional sync with Engram. This is Phase 2 of the Engram project.
 
 ## What This Plugin Does
 
-A thin TypeScript sync client (~300-500 lines). It does NOT parse markdown, generate embeddings, or talk to Qdrant — brain-api handles all of that. The plugin just pushes/pulls notes via REST.
+A thin TypeScript sync client (~300-500 lines). It does NOT parse markdown, generate embeddings, or talk to Qdrant — Engram handles all of that. The plugin just pushes/pulls notes via REST.
 
 ### Responsibilities
 
 1. **Watch vault events** — `app.vault.on("create")`, `on("modify")`, `on("delete")`, `on("rename")`
-2. **Push changes to brain-api** — POST /notes with file content + metadata
-3. **Pull changes from brain-api** — GET /notes/changes on startup and periodically
+2. **Push changes to Engram** — POST /notes with file content + metadata
+3. **Pull changes from Engram** — GET /notes/changes on startup and periodically
 4. **Write remote changes to vault** — files created/edited via MCP or other devices
-5. **Settings panel** — brain-api URL, API key, ignore patterns, sync interval
+5. **Settings panel** — Engram URL, API key, ignore patterns, sync interval
 
 ### Does NOT
 
-- Parse markdown or chunk text (brain-api does this)
-- Generate embeddings (brain-api does this via Ollama)
-- Talk to Qdrant (brain-api does this)
-- Handle search (brain-api does this)
-- Manage auth/users (brain-api does this)
+- Parse markdown or chunk text (Engram does this)
+- Generate embeddings (Engram does this via Ollama)
+- Talk to Qdrant (Engram does this)
+- Handle search (Engram does this)
+- Manage auth/users (Engram does this)
 
 ## Testing
 
@@ -31,7 +31,7 @@ npm test           # Run unit tests
 npm run build      # Build the plugin
 ```
 
-## brain-api Endpoints Used
+## Engram Endpoints Used
 
 All endpoints require `Authorization: Bearer <api_key>`. All data scoped by user.
 
@@ -75,7 +75,7 @@ npm install
 npm run build
 
 # Copy to Obsidian vault
-cp main.js manifest.json styles.css /path/to/vault/.obsidian/plugins/brain-sync/
+cp main.js manifest.json styles.css /path/to/vault/.obsidian/plugins/engram-sync/
 ```
 
 ## Architecture
@@ -111,5 +111,5 @@ Ongoing (vault open)
 
 ## Infrastructure
 
-- **brain-api**: FastRaid (10.0.20.214:8000) — the sync hub, note store, indexer, search engine
-- **Dev/test**: `docker compose up` in edi-brain repo starts brain-api + postgres locally on :8000
+- **Engram**: FastRaid (10.0.20.214:8000) — the sync hub, note store, indexer, search engine
+- **Dev/test**: `docker compose up` in edi-brain repo starts Engram + postgres locally on :8000

@@ -97,7 +97,7 @@ export class NoteStream {
 								const event = JSON.parse(currentData) as NoteStreamEvent;
 								this.onEvent?.(event);
 							} catch (e) {
-								console.error("Brain SSE: failed to parse event", e);
+								console.error("Engram SSE: failed to parse event", e);
 							}
 						}
 						currentEvent = "";
@@ -110,7 +110,7 @@ export class NoteStream {
 				// Intentional disconnect
 				return;
 			}
-			console.error("Brain SSE: stream error", e);
+			console.error("Engram SSE: stream error", e);
 		} finally {
 			this.setConnected(false);
 		}
@@ -119,7 +119,7 @@ export class NoteStream {
 		if (this.controller && !this.controller.signal.aborted) {
 			const jitter = Math.random() * this.reconnectMs * 0.5;
 			const delay = this.reconnectMs + jitter;
-			console.log(`Brain SSE: reconnecting in ${Math.round(delay)}ms`);
+			console.log(`Engram SSE: reconnecting in ${Math.round(delay)}ms`);
 
 			this.controller = null;
 			setTimeout(() => {

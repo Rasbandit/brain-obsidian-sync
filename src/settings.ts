@@ -1,13 +1,13 @@
 /**
- * Settings tab for Brain Sync plugin.
+ * Settings tab for Engram Sync plugin.
  */
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
-import type BrainSyncPlugin from "./main";
+import type EngramSyncPlugin from "./main";
 
-export class BrainSyncSettingTab extends PluginSettingTab {
-	plugin: BrainSyncPlugin;
+export class EngramSyncSettingTab extends PluginSettingTab {
+	plugin: EngramSyncPlugin;
 
-	constructor(app: App, plugin: BrainSyncPlugin) {
+	constructor(app: App, plugin: EngramSyncPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
@@ -16,11 +16,11 @@ export class BrainSyncSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		containerEl.createEl("h2", { text: "Brain Sync Settings" });
+		containerEl.createEl("h2", { text: "Engram Sync Settings" });
 
 		new Setting(containerEl)
-			.setName("Brain API URL")
-			.setDesc("Full URL to your brain-api instance (e.g. http://10.0.20.214:8000)")
+			.setName("Engram URL")
+			.setDesc("Full URL to your Engram instance (e.g. http://10.0.20.214:8000)")
 			.addText((text) =>
 				text
 					.setPlaceholder("http://localhost:8000")
@@ -33,10 +33,10 @@ export class BrainSyncSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("API Key")
-			.setDesc("Bearer token from brain-api settings page (starts with brain_)")
+			.setDesc("Bearer token from Engram settings page (starts with engram_)")
 			.addText((text) =>
 				text
-					.setPlaceholder("brain_abc123...")
+					.setPlaceholder("engram_abc123...")
 					.setValue(this.plugin.settings.apiKey)
 					.onChange(async (value) => {
 						this.plugin.settings.apiKey = value;
@@ -62,7 +62,7 @@ export class BrainSyncSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Debounce (ms)")
-			.setDesc("Delay after editing before pushing to brain-api. Prevents flooding during typing.")
+			.setDesc("Delay after editing before pushing to Engram. Prevents flooding during typing.")
 			.addText((text) =>
 				text
 					.setPlaceholder("2000")
@@ -89,11 +89,27 @@ export class BrainSyncSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Ignore patterns")
-			.setDesc("Paths to skip (one per line). Folder patterns end with /")
+			.setName("Max file size (MB)")
+			.setDesc("Maximum size for binary attachments (images, PDFs, etc.). Files larger than this are skipped.")
+			.addText((text) =>
+				text
+					.setPlaceholder("5")
+					.setValue(String(this.plugin.settings.maxFileSizeMB))
+					.onChange(async (value) => {
+						const num = parseInt(value, 10);
+						if (!isNaN(num) && num >= 1 && num <= 100) {
+							this.plugin.settings.maxFileSizeMB = num;
+							await this.plugin.saveSettings();
+						}
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName("Additional ignore patterns")
+			.setDesc("Extra paths to skip (one per line). Folder patterns end with /. Note: .obsidian/, .trash/, and .git/ are always ignored.")
 			.addTextArea((text) =>
 				text
-					.setPlaceholder(".obsidian/\n.trash/\n.git/")
+					.setPlaceholder("drafts/\nsecret.md")
 					.setValue(this.plugin.settings.ignorePatterns)
 					.onChange(async (value) => {
 						this.plugin.settings.ignorePatterns = value;
@@ -106,14 +122,14 @@ export class BrainSyncSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Test connection")
-			.setDesc("Check if brain-api is reachable")
+			.setDesc("Check if Engram is reachable")
 			.addButton((btn) =>
 				btn.setButtonText("Test").onClick(async () => {
 					const ok = await this.plugin.api.health();
 					new Notice(
 						ok
-							? "Brain API: connected!"
-							: "Brain API: connection failed",
+							? "Engram: connected!"
+							: "Engram: connection failed",
 					);
 				}),
 			);
@@ -123,18 +139,18 @@ export class BrainSyncSettingTab extends PluginSettingTab {
 			.setDesc("Pull remote changes and push local changes")
 			.addButton((btn) =>
 				btn.setButtonText("Sync").onClick(async () => {
-					new Notice("Brain Sync: syncing...");
+					new Notice("Engram Sync: syncing...");
 					const { pulled, pushed } =
 						await this.plugin.syncEngine.fullSync();
 					new Notice(
-						`Brain Sync: pulled ${pulled}, pushed ${pushed}`,
+						`Engram Sync: pulled ${pulled}, pushed ${pushed}`,
 					);
 				}),
 			);
 
 		new Setting(containerEl)
 			.setName("Push entire vault")
-			.setDesc("Initial import — push all markdown files to brain-api. Only needed once.")
+			.setDesc("Initial import — push all syncable files to Engram. Only needed once.")
 			.addButton((btn) =>
 				btn
 					.setButtonText("Push All")
@@ -142,7 +158,7 @@ export class BrainSyncSettingTab extends PluginSettingTab {
 					.onClick(async () => {
 						const count =
 							await this.plugin.syncEngine.pushAll();
-						new Notice(`Brain Sync: pushed ${count} files`);
+						new Notice(`Engram Sync: pushed ${count} files`);
 					}),
 			);
 	}

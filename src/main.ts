@@ -1,33 +1,39 @@
 /**
- * Brain Sync — Obsidian plugin for bidirectional sync with brain-api.
+ * Engram Sync — Obsidian plugin for bidirectional sync with Engram.
  *
- * Pushes vault changes to brain-api for indexing/search.
+ * Pushes vault changes to Engram for indexing/search.
  * Pulls MCP-created notes and changes from other devices.
  */
 import { Notice, Plugin } from "obsidian";
-import { BrainApi } from "./api";
-import { BrainSyncSettings, DEFAULT_SETTINGS } from "./types";
+import { EngramApi } from "./api";
+import { EngramSyncSettings, DEFAULT_SETTINGS, SyncStatus } from "./types";
 import { SyncEngine } from "./sync";
-import { BrainSyncSettingTab } from "./settings";
+import { EngramSyncSettingTab } from "./settings";
 import { NoteStream } from "./stream";
+import { FirstSyncModal } from "./first-sync-modal";
+import { ConflictModal } from "./conflict-modal";
+
+import { QueueEntry } from "./types";
 
 interface PluginData {
-	settings: BrainSyncSettings;
+	settings: EngramSyncSettings;
 	lastSync: string;
+	offlineQueue?: QueueEntry[];
 }
 
-export default class BrainSyncPlugin extends Plugin {
-	settings: BrainSyncSettings = DEFAULT_SETTINGS;
-	api: BrainApi = new BrainApi("", "");
+export default class EngramSyncPlugin extends Plugin {
+	settings: EngramSyncSettings = DEFAULT_SETTINGS;
+	api: EngramApi = new EngramApi("", "");
 	syncEngine: SyncEngine = null!;
 	private syncInterval: ReturnType<typeof setInterval> | null = null;
 	noteStream: NoteStream | null = null;
 	private statusBarEl: HTMLElement | null = null;
+	private sseConnected: boolean = false;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
 
-		this.api = new BrainApi(this.settings.apiUrl, this.settings.apiKey);
+		this.api = new EngramApi(this.settings.apiUrl, this.settings.apiKey);
 
 		this.syncEngine = new SyncEngine(
 			this.app,
@@ -38,14 +44,31 @@ export default class BrainSyncPlugin extends Plugin {
 			},
 		);
 
-		// Restore last sync timestamp
+		this.syncEngine.onStatusChange = (status) => {
+			this.updateStatusBar(status);
+		};
+
+		this.syncEngine.onConflict = async (info) => {
+			const modal = new ConflictModal(this.app, info);
+			return modal.waitForChoice();
+		};
+
+		// Wire up queue persistence
+		this.syncEngine.queue.onPersist(async (entries) => {
+			await this.savePluginData(this.syncEngine.getLastSync(), entries);
+		});
+
+		// Restore last sync timestamp and offline queue
 		const saved = await this.loadData();
 		if (saved?.lastSync) {
 			this.syncEngine.setLastSync(saved.lastSync);
 		}
+		if (saved?.offlineQueue?.length) {
+			this.syncEngine.queue.load(saved.offlineQueue);
+		}
 
 		// Register settings tab
-		this.addSettingTab(new BrainSyncSettingTab(this.app, this));
+		this.addSettingTab(new EngramSyncSettingTab(this.app, this));
 
 		// Register vault events
 		this.registerEvent(
@@ -71,33 +94,45 @@ export default class BrainSyncPlugin extends Plugin {
 
 		// Add commands
 		this.addCommand({
-			id: "brain-sync-now",
+			id: "engram-sync-now",
 			name: "Sync now",
 			callback: async () => {
-				new Notice("Brain Sync: syncing...");
+				new Notice("Engram Sync: syncing...");
 				const { pulled, pushed } =
 					await this.syncEngine.fullSync();
 				new Notice(
-					`Brain Sync: pulled ${pulled}, pushed ${pushed}`,
+					`Engram Sync: pulled ${pulled}, pushed ${pushed}`,
 				);
 			},
 		});
 
 		this.addCommand({
-			id: "brain-push-all",
+			id: "engram-push-all",
 			name: "Push entire vault",
 			callback: async () => {
 				const count = await this.syncEngine.pushAll();
-				new Notice(`Brain Sync: pushed ${count} files`);
+				new Notice(`Engram Sync: pushed ${count} files`);
 			},
 		});
 
 		// Start periodic sync if configured
 		this.startSyncInterval();
 
-		// Status bar
+		// Status bar (click to sync)
 		this.statusBarEl = this.addStatusBarItem();
-		this.statusBarEl.setText("Brain: ready");
+		this.statusBarEl.setText("Engram: ready");
+		this.statusBarEl.style.cursor = "pointer";
+		this.statusBarEl.addEventListener("click", () => {
+			if (this.settings.apiUrl && this.settings.apiKey) {
+				new Notice("Engram Sync: syncing...");
+				this.syncEngine.fullSync().then(({ pulled, pushed }) => {
+					new Notice(`Engram Sync: pulled ${pulled}, pushed ${pushed}`);
+				}).catch((e) => {
+					console.error("Engram Sync: manual sync failed", e);
+					new Notice("Engram Sync: sync failed");
+				});
+			}
+		});
 
 		// SSE live sync
 		this.setupNoteStream();
@@ -105,17 +140,7 @@ export default class BrainSyncPlugin extends Plugin {
 		// Initial sync on startup (after workspace is ready)
 		this.app.workspace.onLayoutReady(async () => {
 			if (this.settings.apiUrl && this.settings.apiKey) {
-				try {
-					const { pulled, pushed } =
-						await this.syncEngine.fullSync();
-					if (pulled > 0 || pushed > 0) {
-						new Notice(
-							`Brain Sync: pulled ${pulled}, pushed ${pushed}`,
-						);
-					}
-				} catch (e) {
-					console.error("Brain Sync: startup sync failed", e);
-				}
+				await this.doSyncWithFirstSyncCheck();
 			}
 		});
 	}
@@ -145,22 +170,19 @@ export default class BrainSyncPlugin extends Plugin {
 		this.setupNoteStream();
 		await this.savePluginData(this.syncEngine.getLastSync());
 
-		// Trigger immediate sync when settings are configured (handles fresh install)
+		// Trigger sync when settings are configured (shows modal on first sync)
 		if (this.settings.apiUrl && this.settings.apiKey) {
-			this.syncEngine.fullSync().then(({ pulled, pushed }) => {
-				if (pulled > 0 || pushed > 0) {
-					new Notice(`Brain Sync: pulled ${pulled}, pushed ${pushed}`);
-				}
-			}).catch((e) => {
-				console.error("Brain Sync: sync after settings change failed", e);
+			this.doSyncWithFirstSyncCheck().catch((e) => {
+				console.error("Engram Sync: sync after settings change failed", e);
 			});
 		}
 	}
 
-	private async savePluginData(lastSync: string): Promise<void> {
+	private async savePluginData(lastSync: string, offlineQueue?: QueueEntry[]): Promise<void> {
 		await this.saveData({
 			settings: this.settings,
 			lastSync,
+			offlineQueue: offlineQueue ?? this.syncEngine.queue.all(),
 		} as PluginData);
 	}
 
@@ -171,7 +193,8 @@ export default class BrainSyncPlugin extends Plugin {
 
 		const { apiUrl, apiKey, liveSyncEnabled } = this.settings;
 		if (!liveSyncEnabled || !apiUrl || !apiKey) {
-			if (this.statusBarEl) this.statusBarEl.setText("Brain: ready");
+			this.sseConnected = false;
+			this.updateStatusBar(this.syncEngine.getStatus());
 			return;
 		}
 
@@ -182,18 +205,90 @@ export default class BrainSyncPlugin extends Plugin {
 		};
 
 		this.noteStream.onStatusChange = (connected) => {
-			if (this.statusBarEl) {
-				this.statusBarEl.setText(connected ? "Brain: live" : "Brain: ready");
-			}
+			this.sseConnected = connected;
+			this.updateStatusBar(this.syncEngine.getStatus());
 			// Catch-up pull on reconnect to cover missed events
 			if (connected) {
 				this.syncEngine.pull().catch((e) => {
-					console.error("Brain Sync: catch-up pull failed", e);
+					console.error("Engram Sync: catch-up pull failed", e);
 				});
 			}
 		};
 
 		this.noteStream.connect();
+	}
+
+	/** Run sync, showing first-sync modal if no prior sync state exists. */
+	async doSyncWithFirstSyncCheck(): Promise<void> {
+		if (this.syncEngine.isFirstSync()) {
+			const localCount = this.syncEngine.countSyncableFiles();
+			const modal = new FirstSyncModal(this.app, localCount);
+			const choice = await modal.waitForChoice();
+
+			if (choice === "cancel") {
+				return;
+			}
+
+			// Always pull first
+			const pulled = await this.syncEngine.pull();
+			if (pulled > 0) {
+				new Notice(`Engram Sync: pulled ${pulled} notes from server`);
+			}
+
+			if (choice === "push-all") {
+				const pushed = await this.syncEngine.pushAll();
+				new Notice(`Engram Sync: pushed ${pushed} files`);
+			} else {
+				new Notice("Engram Sync: pull complete. Local notes were not pushed.");
+			}
+		} else {
+			try {
+				const { pulled, pushed } = await this.syncEngine.fullSync();
+				if (pulled > 0 || pushed > 0) {
+					new Notice(`Engram Sync: pulled ${pulled}, pushed ${pushed}`);
+				}
+			} catch (e) {
+				console.error("Engram Sync: sync failed", e);
+			}
+		}
+	}
+
+	/** Update status bar text and tooltip based on sync state + SSE connection. */
+	private updateStatusBar(status: SyncStatus): void {
+		if (!this.statusBarEl) return;
+
+		let text: string;
+		let tooltip: string;
+
+		if (status.state === "offline") {
+			text = status.queued > 0
+				? `Engram: offline (${status.queued} queued)`
+				: "Engram: offline";
+			tooltip = "Server unreachable — changes will sync when connected";
+		} else if (status.state === "error") {
+			text = "Engram: error";
+			tooltip = status.error || "Unknown error";
+		} else if (status.state === "syncing") {
+			text = status.pending > 0 ? `Engram: syncing (${status.pending})` : "Engram: syncing";
+			tooltip = "Sync in progress...";
+		} else if (status.pending > 0) {
+			text = `Engram: pending (${status.pending})`;
+			tooltip = `${status.pending} file(s) queued`;
+		} else if (this.sseConnected) {
+			text = "Engram: live";
+			tooltip = "SSE connected — real-time sync active";
+		} else {
+			text = "Engram: ready";
+			tooltip = "Click to sync";
+		}
+
+		if (status.lastSync) {
+			const date = new Date(status.lastSync);
+			tooltip += `\nLast sync: ${date.toLocaleString()}`;
+		}
+
+		this.statusBarEl.setText(text);
+		this.statusBarEl.setAttribute("aria-label", tooltip);
 	}
 
 	private startSyncInterval(): void {
@@ -209,7 +304,7 @@ export default class BrainSyncPlugin extends Plugin {
 					try {
 						await this.syncEngine.pull();
 					} catch (e) {
-						console.error("Brain Sync: periodic pull failed", e);
+						console.error("Engram Sync: periodic pull failed", e);
 					}
 				},
 				minutes * 60 * 1000,

@@ -1,12 +1,20 @@
 /**
- * brain-api HTTP client.
+ * Engram HTTP client.
  *
  * Uses Obsidian's requestUrl() which bypasses CORS and works on mobile.
  */
 import { requestUrl, RequestUrlResponse } from "obsidian";
-import { ChangesResponse, DeleteResponse, NoteDetail, NoteResponse } from "./types";
+import {
+	AttachmentChangesResponse,
+	AttachmentDetail,
+	AttachmentResponse,
+	ChangesResponse,
+	DeleteResponse,
+	NoteDetail,
+	NoteResponse,
+} from "./types";
 
-export class BrainApi {
+export class EngramApi {
 	constructor(
 		private baseUrl: string,
 		private apiKey: string,
@@ -49,7 +57,7 @@ export class BrainApi {
 		}
 	}
 
-	/** Push a note to brain-api. */
+	/** Push a note to Engram. */
 	async pushNote(
 		path: string,
 		content: string,
@@ -86,4 +94,66 @@ export class BrainApi {
 		const resp = await this.request("DELETE", `/notes/${encoded}`);
 		return resp.json as DeleteResponse;
 	}
+
+	// --- Attachment methods ---
+
+	/** Push a binary attachment as base64. */
+	async pushAttachment(
+		path: string,
+		contentBase64: string,
+		mimeType: string,
+		mtime: number,
+	): Promise<AttachmentResponse> {
+		const resp = await this.request("POST", "/attachments", {
+			path,
+			content_base64: contentBase64,
+			mime_type: mimeType,
+			mtime,
+		});
+		return resp.json as AttachmentResponse;
+	}
+
+	/** Get attachment content (base64). */
+	async getAttachment(path: string): Promise<AttachmentDetail> {
+		const encoded = encodeURIComponent(path);
+		const resp = await this.request("GET", `/attachments/${encoded}`);
+		return resp.json as AttachmentDetail;
+	}
+
+	/** Delete an attachment. */
+	async deleteAttachment(path: string): Promise<DeleteResponse> {
+		const encoded = encodeURIComponent(path);
+		const resp = await this.request("DELETE", `/attachments/${encoded}`);
+		return resp.json as DeleteResponse;
+	}
+
+	/** Get attachment changes since a timestamp. */
+	async getAttachmentChanges(since: string): Promise<AttachmentChangesResponse> {
+		const encoded = encodeURIComponent(since);
+		const resp = await this.request(
+			"GET",
+			`/attachments/changes?since=${encoded}`,
+		);
+		return resp.json as AttachmentChangesResponse;
+	}
+}
+
+/** Convert an ArrayBuffer to a base64 string. */
+export function arrayBufferToBase64(buffer: ArrayBuffer): string {
+	const bytes = new Uint8Array(buffer);
+	let binary = "";
+	for (let i = 0; i < bytes.byteLength; i++) {
+		binary += String.fromCharCode(bytes[i]);
+	}
+	return btoa(binary);
+}
+
+/** Convert a base64 string to an ArrayBuffer. */
+export function base64ToArrayBuffer(base64: string): ArrayBuffer {
+	const binary = atob(base64);
+	const bytes = new Uint8Array(binary.length);
+	for (let i = 0; i < binary.length; i++) {
+		bytes[i] = binary.charCodeAt(i);
+	}
+	return bytes.buffer;
 }
