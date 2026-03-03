@@ -18,6 +18,16 @@ export class TAbstractFile {
 	path: string = "";
 }
 
+export class TFolder {
+	path: string;
+	children: any[];
+
+	constructor(path: string, children: any[] = []) {
+		this.path = path;
+		this.children = children;
+	}
+}
+
 export class Notice {
 	constructor(_message: string, _timeout?: number) {}
 }

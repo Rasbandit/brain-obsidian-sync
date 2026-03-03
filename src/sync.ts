@@ -1,7 +1,7 @@
 /**
  * Sync engine — handles push/pull logic, debouncing, and ignore patterns.
  */
-import { App, TFile, TAbstractFile, Notice, normalizePath } from "obsidian";
+import { App, TFile, TFolder, TAbstractFile, Notice, normalizePath } from "obsidian";
 import { EngramApi, arrayBufferToBase64, base64ToArrayBuffer } from "./api";
 import { AttachmentChange, EngramSyncSettings, ConflictChoice, ConflictInfo, NoteChange, NoteStreamEvent, QueueEntry, SyncStatus } from "./types";
 import { OfflineQueue } from "./offline-queue";
@@ -398,6 +398,7 @@ export class SyncEngine {
 			const existing = this.app.vault.getAbstractFileByPath(normalized);
 			if (existing && existing instanceof TFile) {
 				await this.app.vault.trash(existing, true);
+				await this.removeEmptyFolders(normalized);
 			}
 			return;
 		}
@@ -444,6 +445,7 @@ export class SyncEngine {
 			const existing = this.app.vault.getAbstractFileByPath(normalized);
 			if (existing && existing instanceof TFile) {
 				await this.app.vault.trash(existing, true);
+				await this.removeEmptyFolders(normalized);
 			}
 			return;
 		}
@@ -513,6 +515,7 @@ export class SyncEngine {
 			const existing = this.app.vault.getAbstractFileByPath(normalized);
 			if (existing && existing instanceof TFile) {
 				await this.app.vault.trash(existing, true);
+				await this.removeEmptyFolders(normalized);
 			}
 			return;
 		}
@@ -580,6 +583,26 @@ export class SyncEngine {
 		}
 
 		await this.app.vault.createFolder(path);
+	}
+
+	/** Remove empty parent folders after a file deletion, walking up the tree. */
+	private async removeEmptyFolders(filePath: string): Promise<void> {
+		let folder = filePath.includes("/")
+			? filePath.substring(0, filePath.lastIndexOf("/"))
+			: "";
+
+		while (folder) {
+			const existing = this.app.vault.getAbstractFileByPath(folder);
+			if (!(existing instanceof TFolder)) break;
+			if (existing.children.length > 0) break;
+
+			await this.app.vault.trash(existing, true);
+
+			// Walk up to parent
+			folder = folder.includes("/")
+				? folder.substring(0, folder.lastIndexOf("/"))
+				: "";
+		}
 	}
 
 	// --- Full sync (startup) ---
