@@ -151,6 +151,17 @@ export class EngramApi {
 		return resp.json as SearchResponse;
 	}
 
+	/** Query the server's rate limit. Returns 0 for unlimited. */
+	async getRateLimit(): Promise<number> {
+		try {
+			const resp = await this.request("GET", "/rate-limit");
+			return (resp.json as { requests_per_minute: number }).requests_per_minute;
+		} catch {
+			// Server doesn't support this endpoint — assume unlimited
+			return 0;
+		}
+	}
+
 	/** Get attachment changes since a timestamp. */
 	async getAttachmentChanges(since: string): Promise<AttachmentChangesResponse> {
 		const encoded = encodeURIComponent(since);

@@ -56,6 +56,8 @@ export class SyncEngine {
 	private activePushCount: number = 0;
 	private maxConcurrentPushes: number = 5;
 	private pushWaiters: (() => void)[] = [];
+	private rateLimitRPM: number = 0; // 0 = unlimited
+	private requestTimestamps: number[] = [];
 	readonly queue: OfflineQueue = new OfflineQueue();
 
 	/** Called whenever sync status changes (for status bar updates). */
@@ -283,6 +285,51 @@ export class SyncEngine {
 		if (next) next();
 	}
 
+	/** Query the server's rate limit and configure the pacer.
+	 *  Applies a 10% safety margin (e.g. 100 RPM → 90 effective). */
+	async configureRateLimit(): Promise<void> {
+		try {
+			const serverRPM = await this.api.getRateLimit();
+			if (serverRPM > 0) {
+				this.rateLimitRPM = Math.floor(serverRPM * 0.9);
+				devLog().log("pacer", `server limit=${serverRPM} RPM, effective=${this.rateLimitRPM} RPM`);
+			} else {
+				this.rateLimitRPM = 0;
+				devLog().log("pacer", "server reports unlimited — pacer disabled");
+			}
+		} catch {
+			this.rateLimitRPM = 0;
+			devLog().log("pacer", "failed to query rate limit — assuming unlimited");
+		}
+	}
+
+	/** Wait if needed to stay within the server's rate limit. */
+	private async paceRequest(): Promise<void> {
+		if (this.rateLimitRPM <= 0) return;
+
+		const now = Date.now();
+		const windowMs = 60_000;
+		const cutoff = now - windowMs;
+
+		// Prune timestamps outside the window
+		this.requestTimestamps = this.requestTimestamps.filter((t) => t > cutoff);
+
+		if (this.requestTimestamps.length < this.rateLimitRPM) {
+			this.requestTimestamps.push(now);
+			return;
+		}
+
+		// At capacity — wait until the oldest request exits the window
+		const oldest = this.requestTimestamps[0];
+		const waitMs = oldest + windowMs - now + 50; // +50ms buffer
+		devLog().log("pacer", `at capacity (${this.requestTimestamps.length}/${this.rateLimitRPM}), waiting ${waitMs}ms`);
+		await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+
+		// Prune again and record
+		this.requestTimestamps = this.requestTimestamps.filter((t) => t > Date.now() - windowMs);
+		this.requestTimestamps.push(Date.now());
+	}
+
 	/** Push a single file to Engram. Returns true on success. */
 	private async pushFile(file: TFile): Promise<boolean> {
 		if (this.pushing.has(file.path)) return false;
@@ -296,6 +343,7 @@ export class SyncEngine {
 		devLog().log("push", `start ${isBinary ? "attachment" : "note"}: ${file.path} (active=${this.activePushCount})`);
 
 		try {
+			await this.paceRequest();
 			const mtime = file.stat.mtime / 1000; // Obsidian uses ms, Engram uses seconds
 			if (isBinary) {
 				const buffer = await this.app.vault.readBinary(file);
@@ -650,6 +698,9 @@ export class SyncEngine {
 			throw new Error(this.lastError);
 		}
 
+		// Configure request pacer from server-reported rate limit
+		await this.configureRateLimit();
+
 		// Snapshot lastSync before pull — pull updates it to server_time,
 		// which would cause pushModifiedFiles to miss files modified between
 		// the old and new lastSync values.
@@ -793,6 +844,7 @@ export class SyncEngine {
 		let flushed = 0;
 		for (const entry of entries) {
 			try {
+				await this.paceRequest();
 				if (entry.action === "delete") {
 					if (entry.kind === "attachment") {
 						await this.api.deleteAttachment(entry.path);

@@ -32,6 +32,7 @@ const mockApi = {
 	}),
 	deleteAttachment: jest.fn().mockResolvedValue({ deleted: true, path: "" }),
 	getAttachmentChanges: jest.fn().mockResolvedValue({ changes: [], server_time: "2026-01-01T00:00:00Z" }),
+	getRateLimit: jest.fn().mockResolvedValue(0),
 } as unknown as EngramApi;
 
 // Mock the Obsidian App
@@ -1684,5 +1685,84 @@ describe("push concurrency limit", () => {
 		}
 
 		expect(completedCount).toBe(10);
+	});
+});
+
+// --- Request Pacer ---
+
+describe("request pacer", () => {
+	test("configureRateLimit queries server and applies 10% safety margin", async () => {
+		const engine = createEngine();
+		(mockApi.getRateLimit as jest.Mock).mockResolvedValueOnce(100);
+
+		await engine.configureRateLimit();
+
+		expect((engine as any).rateLimitRPM).toBe(90);
+	});
+
+	test("configureRateLimit sets 0 when server reports unlimited", async () => {
+		const engine = createEngine();
+		(mockApi.getRateLimit as jest.Mock).mockResolvedValueOnce(0);
+
+		await engine.configureRateLimit();
+
+		expect((engine as any).rateLimitRPM).toBe(0);
+	});
+
+	test("configureRateLimit defaults to unlimited on error", async () => {
+		const engine = createEngine();
+		(mockApi.getRateLimit as jest.Mock).mockRejectedValueOnce(new Error("network error"));
+
+		await engine.configureRateLimit();
+
+		expect((engine as any).rateLimitRPM).toBe(0);
+	});
+
+	test("paceRequest does not delay when under limit", async () => {
+		const engine = createEngine();
+		(engine as any).rateLimitRPM = 100;
+
+		const start = Date.now();
+		await (engine as any).paceRequest();
+		const elapsed = Date.now() - start;
+
+		expect(elapsed).toBeLessThan(50);
+		expect((engine as any).requestTimestamps.length).toBe(1);
+	});
+
+	test("paceRequest does nothing when rate limit is 0 (unlimited)", async () => {
+		const engine = createEngine();
+		(engine as any).rateLimitRPM = 0;
+
+		await (engine as any).paceRequest();
+
+		expect((engine as any).requestTimestamps.length).toBe(0);
+	});
+
+	test("paceRequest delays when at capacity", async () => {
+		const engine = createEngine();
+		(engine as any).rateLimitRPM = 3;
+
+		// Set timestamps near the window boundary (50ms from expiring)
+		const windowStart = Date.now() - 59_950;
+		(engine as any).requestTimestamps = [windowStart, windowStart + 10, windowStart + 20];
+
+		const start = Date.now();
+		await (engine as any).paceRequest();
+		const elapsed = Date.now() - start;
+
+		// Should wait ~100ms (50ms until oldest expires + 50ms buffer)
+		expect(elapsed).toBeGreaterThanOrEqual(50);
+		expect(elapsed).toBeLessThan(500);
+	});
+
+	test("fullSync calls configureRateLimit", async () => {
+		const engine = createEngine();
+		const spy = jest.spyOn(engine, "configureRateLimit").mockResolvedValue(undefined);
+
+		await engine.fullSync();
+
+		expect(spy).toHaveBeenCalledTimes(1);
+		spy.mockRestore();
 	});
 });
