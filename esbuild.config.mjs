@@ -36,6 +36,9 @@ const context = await esbuild.context({
 	sourcemap: prod ? false : "inline",
 	treeShaking: true,
 	outfile: "main.js",
+	define: {
+		"DEV_MODE": prod ? "false" : "true",
+	},
 });
 
 if (prod) {

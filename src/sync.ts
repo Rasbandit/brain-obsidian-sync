@@ -5,6 +5,7 @@ import { App, TFile, TFolder, TAbstractFile, Notice, normalizePath } from "obsid
 import { EngramApi, arrayBufferToBase64, base64ToArrayBuffer } from "./api";
 import { AttachmentChange, EngramSyncSettings, ConflictChoice, ConflictInfo, NoteChange, NoteStreamEvent, QueueEntry, SyncStatus } from "./types";
 import { OfflineQueue } from "./offline-queue";
+import { devLog } from "./dev-log";
 
 /** How long (ms) after a push completes to suppress SSE echoes for that path. */
 const ECHO_COOLDOWN_MS = 5000;
@@ -82,6 +83,7 @@ export class SyncEngine {
 	 *  Called after layout is ready and initial sync completes. */
 	setReady(): void {
 		this.ready = true;
+		devLog().log("lifecycle", "setReady — event handlers enabled");
 	}
 
 	setLastSync(timestamp: string): void {
@@ -291,6 +293,7 @@ export class SyncEngine {
 
 		const isBinary = this.isBinaryFile(file);
 		let success = false;
+		devLog().log("push", `start ${isBinary ? "attachment" : "note"}: ${file.path} (active=${this.activePushCount})`);
 
 		try {
 			const mtime = file.stat.mtime / 1000; // Obsidian uses ms, Engram uses seconds
@@ -311,9 +314,11 @@ export class SyncEngine {
 				await this.api.pushNote(file.path, content, mtime);
 			}
 			success = true;
+			devLog().log("push", `ok: ${file.path}`);
 			this.goOnline();
 		} catch (e) {
 			console.error(`Engram Sync: failed to push ${file.path}`, e);
+			devLog().log("error", `push failed: ${file.path} — ${e instanceof Error ? e.message : e}`);
 			// Queue for retry — content-free to avoid O(n²) serialization.
 			// Content will be re-read from vault when flushing.
 			await this.enqueueChange({
@@ -363,12 +368,14 @@ export class SyncEngine {
 		this.pulling = true;
 		this.lastError = "";
 		this.emitStatus();
+		devLog().log("pull", `start since=${this.lastSync}`);
 		try {
 			// Fetch note and attachment changes in parallel
 			const [noteResp, attachResp] = await Promise.all([
 				this.api.getChanges(this.lastSync),
 				this.api.getAttachmentChanges(this.lastSync),
 			]);
+			devLog().log("pull", `fetched ${noteResp.changes.length} notes, ${attachResp.changes.length} attachments`);
 			let applied = 0;
 
 			for (const change of noteResp.changes) {
@@ -385,9 +392,11 @@ export class SyncEngine {
 			this.lastSync = serverTime;
 			await this.saveData({ lastSync: this.lastSync });
 
+			devLog().log("pull", `done — applied ${applied}, lastSync=${this.lastSync}`);
 			return applied;
 		} catch (e) {
 			console.error("Engram Sync: pull failed", e);
+			devLog().log("error", `pull failed: ${e instanceof Error ? e.message : e}`);
 			this.lastError = e instanceof Error ? `Pull failed: ${e.message}` : "Pull failed";
 			return 0;
 		} finally {
@@ -399,6 +408,7 @@ export class SyncEngine {
 	/** Handle an SSE stream event (upsert or delete). */
 	async handleStreamEvent(event: NoteStreamEvent): Promise<void> {
 		if (this.shouldIgnore(event.path)) return;
+		devLog().log("sse", `${event.event_type} ${event.kind ?? "note"}: ${event.path}`);
 
 		// Echo suppression — skip events for notes we're currently pushing
 		// or have recently finished pushing (SSE events arrive after push completes)
@@ -484,6 +494,7 @@ export class SyncEngine {
 					return false;
 				}
 
+				devLog().log("pull", `conflict: ${change.path} (local=${localMtime.toFixed(0)} remote=${change.mtime.toFixed(0)})`);
 				const choice = await this.resolveConflict({
 					path: change.path,
 					localContent,
@@ -629,11 +640,13 @@ export class SyncEngine {
 
 	/** Full bidirectional sync: pull remote changes, then push local changes. */
 	async fullSync(): Promise<{ pulled: number; pushed: number }> {
+		devLog().log("lifecycle", "fullSync start");
 		// Verify auth before syncing to give a clear error on bad API key
 		const { ok, error } = await this.api.ping();
 		if (!ok) {
 			this.lastError = error ?? "Connection failed";
 			this.emitStatus();
+			devLog().log("error", `fullSync auth failed: ${this.lastError}`);
 			throw new Error(this.lastError);
 		}
 
@@ -645,6 +658,7 @@ export class SyncEngine {
 		const pulled = await this.pull();
 		const pushed = await this.pushModifiedFiles(prePullSync);
 
+		devLog().log("lifecycle", `fullSync done — pulled=${pulled} pushed=${pushed}`);
 		return { pulled, pushed };
 	}
 
@@ -661,6 +675,7 @@ export class SyncEngine {
 		const toSync = files.filter(
 			(f: TFile) => this.isSyncable(f) && !this.shouldIgnore(f.path) && f.stat.mtime > sinceMs,
 		);
+		devLog().log("push", `pushModifiedFiles: ${toSync.length} files modified since ${since}`);
 
 		for (let i = 0; i < toSync.length; i += 10) {
 			const batch = toSync.slice(i, i + 10);
@@ -727,6 +742,7 @@ export class SyncEngine {
 		if (this.offline) return;
 		this.offline = true;
 		this.lastError = "";
+		devLog().log("lifecycle", `went offline — queue=${this.queue.size}`);
 		this.emitStatus();
 		this.startHealthCheck();
 	}
@@ -737,6 +753,7 @@ export class SyncEngine {
 		this.offline = false;
 		this.lastError = "";
 		this.stopHealthCheck();
+		devLog().log("lifecycle", `went online — flushing queue (${this.queue.size} entries)`);
 		this.emitStatus();
 		// Flush the queue now that we're online
 		this.flushQueue().catch((e) => {
@@ -771,6 +788,7 @@ export class SyncEngine {
 	async flushQueue(): Promise<number> {
 		const entries = this.queue.all();
 		if (entries.length === 0) return 0;
+		devLog().log("queue", `flush start — ${entries.length} entries`);
 
 		let flushed = 0;
 		for (const entry of entries) {
@@ -824,6 +842,7 @@ export class SyncEngine {
 			}
 		}
 
+		devLog().log("queue", `flush done — ${flushed}/${entries.length} flushed, ${this.queue.size} remaining`);
 		this.emitStatus();
 		return flushed;
 	}

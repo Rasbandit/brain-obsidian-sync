@@ -16,6 +16,7 @@ import { SearchModal } from "./search-modal";
 import { SearchView, SEARCH_VIEW_TYPE } from "./search-view";
 
 import { QueueEntry } from "./types";
+import { initDevLog, destroyDevLog, devLog } from "./dev-log";
 
 interface PluginData {
 	settings: EngramSyncSettings;
@@ -33,6 +34,8 @@ export default class EngramSyncPlugin extends Plugin {
 	private sseConnected: boolean = false;
 
 	async onload(): Promise<void> {
+		initDevLog();
+		devLog().log("lifecycle", "plugin loading");
 		await this.loadSettings();
 
 		this.api = new EngramApi(this.settings.apiUrl, this.settings.apiKey);
@@ -183,6 +186,7 @@ export default class EngramSyncPlugin extends Plugin {
 
 		// Initial sync on startup (after workspace is ready)
 		this.app.workspace.onLayoutReady(async () => {
+			devLog().log("lifecycle", "layout ready — starting initial sync");
 			try {
 				if (this.settings.apiUrl && this.settings.apiKey) {
 					await this.doSyncWithFirstSyncCheck();
@@ -194,12 +198,14 @@ export default class EngramSyncPlugin extends Plugin {
 	}
 
 	onunload(): void {
+		devLog().log("lifecycle", "plugin unloading");
 		this.syncEngine?.destroy();
 		this.noteStream?.disconnect();
 		if (this.syncInterval) {
 			clearInterval(this.syncInterval);
 			this.syncInterval = null;
 		}
+		destroyDevLog();
 	}
 
 	async loadSettings(): Promise<void> {
