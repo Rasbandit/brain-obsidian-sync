@@ -2,9 +2,16 @@
 
 Obsidian plugin for bidirectional sync with Engram. This is Phase 2 of the Engram project.
 
+## Life OS
+project: engram-obsidian-sync
+goal: income
+value: financial-freedom
+
+For detailed internals (class map, sync algorithm, type definitions, quirks), read `docs/internals.md`.
+
 ## What This Plugin Does
 
-A thin TypeScript sync client (~300-500 lines). It does NOT parse markdown, generate embeddings, or talk to Qdrant — Engram handles all of that. The plugin just pushes/pulls notes via REST.
+A TypeScript sync client. It does NOT parse markdown, generate embeddings, or talk to Qdrant — Engram handles all of that. The plugin just pushes/pulls notes via REST.
 
 ### Responsibilities
 
@@ -42,6 +49,11 @@ All endpoints require `Authorization: Bearer <api_key>`. All data scoped by user
 | `GET` | `/notes/changes?since=<iso>` | Notes changed since timestamp. Returns `{changes, server_time}`. |
 | `DELETE` | `/notes/{path}` | Soft-delete note. |
 | `GET` | `/folders` | Folder tree with note counts. |
+| `POST` | `/attachments` | Upsert binary file. Body: `{path, content_base64, mime_type, mtime}`. |
+| `GET` | `/attachments/{path}` | Get attachment (base64-encoded content). |
+| `GET` | `/attachments/changes?since=<iso>` | Attachment changes since timestamp. |
+| `DELETE` | `/attachments/{path}` | Soft-delete attachment. |
+| `GET` | `/notes/stream` | SSE stream for live sync (note_change events). |
 | `GET` | `/health` | Health check (no auth required). |
 
 ### POST /notes Request/Response
@@ -73,10 +85,48 @@ Plugin uses `server_time` as `since` for the next sync — no missed changes eve
 ```bash
 npm install
 npm run build
-
-# Copy to Obsidian vault
-cp main.js manifest.json styles.css /path/to/vault/.obsidian/plugins/engram-sync/
 ```
+
+## Release Process
+
+No CI/CD — releases are manual. Full steps:
+
+### 1. Version Bump
+
+Update version string in all three files:
+
+- `package.json` → `"version": "X.Y.Z"`
+- `manifest.json` → `"version": "X.Y.Z"`
+- `versions.json` → add `"X.Y.Z": "1.0.0"` (value = minAppVersion)
+
+### 2. Commit, Merge, Tag
+
+```bash
+git switch main
+git merge <branch> --no-edit
+git tag -a vX.Y.Z -m "short description"
+git push origin main --tags
+```
+
+### 3. GitHub Release
+
+```bash
+gh release create vX.Y.Z \
+  main.js manifest.json styles.css \
+  --title "vX.Y.Z: Short title" \
+  --notes "Release notes in markdown"
+```
+
+Required assets: `main.js`, `manifest.json`, `styles.css` — Obsidian reads these from the release.
+
+### 4. Deploy to Local Vault
+
+```bash
+npm run build
+cp main.js manifest.json styles.css "/home/open-claw/Obsidian Vault/.obsidian/plugins/engram-sync/"
+```
+
+Restart Obsidian or disable/re-enable the plugin to pick up changes.
 
 ## Architecture
 
@@ -106,7 +156,7 @@ Ongoing (vault open)
 - **Debounce:** 2 seconds on modify events to avoid flooding during typing
 - **Batch push:** On startup reconciliation, push modified files in batches of 10
 - **Ignore patterns:** Configurable. Defaults: `.obsidian/`, `.trash/`, `.git/`
-- **Conflict handling:** Last-write-wins by mtime (Phase 4 may add manual merge)
+- **Conflict handling:** Modal with 4 choices: Keep Local, Keep Remote, Keep Both (conflict copy), Skip
 - **Sync interval:** Configurable pull interval (default: 5 minutes)
 
 ## Infrastructure
