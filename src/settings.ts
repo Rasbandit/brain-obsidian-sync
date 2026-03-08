@@ -104,18 +104,23 @@ export class EngramSyncSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		new Setting(containerEl)
-			.setName("Additional ignore patterns")
-			.setDesc("Extra paths to skip (one per line). Folder patterns end with /. Note: .obsidian/, .trash/, and .git/ are always ignored.")
-			.addTextArea((text) =>
+		const ignoreSetting = new Setting(containerEl)
+			.setName("Ignore patterns")
+			.setDesc("Extra paths to skip (one per line). Folder patterns end with /. Built-in ignores (.obsidian/, .trash/, .git/) are always applied.")
+			.addTextArea((text) => {
 				text
 					.setPlaceholder("drafts/\nsecret.md")
 					.setValue(this.plugin.settings.ignorePatterns)
 					.onChange(async (value) => {
 						this.plugin.settings.ignorePatterns = value;
 						await this.plugin.saveSettings();
-					}),
-			);
+					});
+				text.inputEl.rows = 6;
+				text.inputEl.style.width = "100%";
+			});
+		ignoreSetting.settingEl.style.flexDirection = "column";
+		ignoreSetting.settingEl.style.alignItems = "flex-start";
+		ignoreSetting.settingEl.style.gap = "8px";
 
 		// Action buttons
 		containerEl.createEl("h3", { text: "Actions" });
