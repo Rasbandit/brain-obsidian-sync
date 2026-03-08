@@ -19,6 +19,7 @@ const mockApi = {
 		updated_at: "2026-03-01T12:00:00Z",
 	}),
 	health: jest.fn().mockResolvedValue(true),
+	ping: jest.fn().mockResolvedValue({ ok: true }),
 	pushAttachment: jest.fn().mockResolvedValue({ attachment: {} }),
 	getAttachment: jest.fn().mockResolvedValue({
 		path: "Assets/image.png",
@@ -1367,5 +1368,55 @@ describe("SyncEngine SSE with kind routing", () => {
 		});
 
 		expect(mockApp.vault.trash).toHaveBeenCalledWith(existingFile, true);
+	});
+});
+
+describe("SyncEngine auth validation", () => {
+	test("fullSync throws on invalid API key", async () => {
+		(mockApi.ping as jest.Mock).mockResolvedValueOnce({ ok: false, error: "Invalid API key" });
+		const engine = createEngine();
+
+		await expect(engine.fullSync()).rejects.toThrow("Invalid API key");
+		expect(mockApi.getChanges).not.toHaveBeenCalled();
+		expect(mockApi.pushNote).not.toHaveBeenCalled();
+	});
+
+	test("fullSync throws on connection failure", async () => {
+		(mockApi.ping as jest.Mock).mockResolvedValueOnce({ ok: false, error: "Connection failed" });
+		const engine = createEngine();
+
+		await expect(engine.fullSync()).rejects.toThrow("Connection failed");
+	});
+
+	test("fullSync proceeds when auth succeeds", async () => {
+		(mockApi.ping as jest.Mock).mockResolvedValueOnce({ ok: true });
+		(mockApi.getChanges as jest.Mock).mockResolvedValueOnce({ changes: [], server_time: "2026-03-01T00:00:00Z" });
+		(mockApi.getAttachmentChanges as jest.Mock).mockResolvedValueOnce({ changes: [], server_time: "2026-03-01T00:00:00Z" });
+		const engine = createEngine();
+
+		const result = await engine.fullSync();
+		expect(result).toEqual({ pulled: 0, pushed: 0 });
+		expect(mockApi.getChanges).toHaveBeenCalled();
+	});
+
+	test("pushAll throws on invalid API key", async () => {
+		(mockApi.ping as jest.Mock).mockResolvedValueOnce({ ok: false, error: "Invalid API key" });
+		const engine = createEngine();
+
+		await expect(engine.pushAll()).rejects.toThrow("Invalid API key");
+		expect(mockApi.pushNote).not.toHaveBeenCalled();
+	});
+
+	test("pushFile returns false on failure", async () => {
+		const engine = createEngine();
+		(mockApi.pushNote as jest.Mock).mockRejectedValueOnce(new Error("401"));
+
+		const file = new TFile("Notes/Test.md");
+		(mockApp.vault.read as jest.Mock).mockResolvedValueOnce("content");
+		(mockApp.vault.read as jest.Mock).mockResolvedValueOnce("content");
+
+		// Access private method via any cast
+		const result = await (engine as any).pushFile(file);
+		expect(result).toBe(false);
 	});
 });

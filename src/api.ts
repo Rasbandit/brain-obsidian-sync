@@ -57,6 +57,20 @@ export class EngramApi {
 		}
 	}
 
+	/** Authenticated ping — verifies both connectivity and API key. */
+	async ping(): Promise<{ ok: boolean; error?: string }> {
+		try {
+			await this.request("GET", "/folders");
+			return { ok: true };
+		} catch (e: unknown) {
+			const status = (e as { status?: number }).status;
+			if (status === 401 || status === 403) {
+				return { ok: false, error: "Invalid API key" };
+			}
+			return { ok: false, error: "Connection failed" };
+		}
+	}
+
 	/** Push a note to Engram. */
 	async pushNote(
 		path: string,

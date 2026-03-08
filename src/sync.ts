@@ -249,14 +249,15 @@ export class SyncEngine {
 		}
 	}
 
-	/** Push a single file to Engram. */
-	private async pushFile(file: TFile): Promise<void> {
-		if (this.pushing.has(file.path)) return;
+	/** Push a single file to Engram. Returns true on success. */
+	private async pushFile(file: TFile): Promise<boolean> {
+		if (this.pushing.has(file.path)) return false;
 		this.pushing.add(file.path);
 		this.lastError = "";
 		this.emitStatus();
 
 		const isBinary = this.isBinaryFile(file);
+		let success = false;
 
 		try {
 			const mtime = file.stat.mtime / 1000; // Obsidian uses ms, Engram uses seconds
@@ -267,7 +268,7 @@ export class SyncEngine {
 				if (buffer.byteLength > maxBytes) {
 					this.lastError = `File too large: ${file.path} (${Math.round(buffer.byteLength / 1024 / 1024)}MB > ${this.settings.maxFileSizeMB}MB)`;
 					this.emitStatus();
-					return;
+					return false;
 				}
 				const base64 = arrayBufferToBase64(buffer);
 				const mimeType = this.getMimeType(file);
@@ -276,6 +277,7 @@ export class SyncEngine {
 				const content = await this.app.vault.read(file);
 				await this.api.pushNote(file.path, content, mtime);
 			}
+			success = true;
 			this.goOnline();
 		} catch (e) {
 			console.error(`Engram Sync: failed to push ${file.path}`, e);
@@ -317,6 +319,7 @@ export class SyncEngine {
 			this.markRecentlyPushed(file.path);
 			this.emitStatus();
 		}
+		return success;
 	}
 
 	/** Suppress SSE echoes for a path for ECHO_COOLDOWN_MS after push. */
@@ -613,6 +616,14 @@ export class SyncEngine {
 
 	/** Full bidirectional sync: pull remote changes, then push local changes. */
 	async fullSync(): Promise<{ pulled: number; pushed: number }> {
+		// Verify auth before syncing to give a clear error on bad API key
+		const { ok, error } = await this.api.ping();
+		if (!ok) {
+			this.lastError = error ?? "Connection failed";
+			this.emitStatus();
+			throw new Error(this.lastError);
+		}
+
 		// Snapshot lastSync before pull — pull updates it to server_time,
 		// which would cause pushModifiedFiles to miss files modified between
 		// the old and new lastSync values.
@@ -640,8 +651,8 @@ export class SyncEngine {
 
 		for (let i = 0; i < toSync.length; i += 10) {
 			const batch = toSync.slice(i, i + 10);
-			await Promise.all(batch.map((f: TFile) => this.pushFile(f)));
-			pushed += batch.length;
+			const results = await Promise.all(batch.map((f: TFile) => this.pushFile(f)));
+			pushed += results.filter(Boolean).length;
 		}
 
 		return pushed;
@@ -660,6 +671,14 @@ export class SyncEngine {
 
 	/** Push ALL syncable files (initial import). */
 	async pushAll(): Promise<number> {
+		// Verify auth before pushing to give a clear error on bad API key
+		const { ok, error } = await this.api.ping();
+		if (!ok) {
+			this.lastError = error ?? "Connection failed";
+			this.emitStatus();
+			throw new Error(this.lastError);
+		}
+
 		const files = this.app.vault.getFiles();
 		const toSync = files.filter((f: TFile) => this.isSyncable(f) && !this.shouldIgnore(f.path));
 		let pushed = 0;
@@ -668,8 +687,8 @@ export class SyncEngine {
 
 		for (let i = 0; i < toSync.length; i += 10) {
 			const batch = toSync.slice(i, i + 10);
-			await Promise.all(batch.map((f: TFile) => this.pushFile(f)));
-			pushed += batch.length;
+			const results = await Promise.all(batch.map((f: TFile) => this.pushFile(f)));
+			pushed += results.filter(Boolean).length;
 
 			if (pushed % 100 === 0) {
 				new Notice(

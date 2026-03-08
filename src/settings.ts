@@ -122,14 +122,14 @@ export class EngramSyncSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Test connection")
-			.setDesc("Check if Engram is reachable")
+			.setDesc("Check if Engram is reachable and API key is valid")
 			.addButton((btn) =>
 				btn.setButtonText("Test").onClick(async () => {
-					const ok = await this.plugin.api.health();
+					const { ok, error } = await this.plugin.api.ping();
 					new Notice(
 						ok
 							? "Engram: connected!"
-							: "Engram: connection failed",
+							: `Engram: ${error}`,
 					);
 				}),
 			);
@@ -140,11 +140,17 @@ export class EngramSyncSettingTab extends PluginSettingTab {
 			.addButton((btn) =>
 				btn.setButtonText("Sync").onClick(async () => {
 					new Notice("Engram Sync: syncing...");
-					const { pulled, pushed } =
-						await this.plugin.syncEngine.fullSync();
-					new Notice(
-						`Engram Sync: pulled ${pulled}, pushed ${pushed}`,
-					);
+					try {
+						const { pulled, pushed } =
+							await this.plugin.syncEngine.fullSync();
+						new Notice(
+							`Engram Sync: pulled ${pulled}, pushed ${pushed}`,
+						);
+					} catch (e) {
+						new Notice(
+							`Engram Sync: ${e instanceof Error ? e.message : "sync failed"}`,
+						);
+					}
 				}),
 			);
 
@@ -156,9 +162,15 @@ export class EngramSyncSettingTab extends PluginSettingTab {
 					.setButtonText("Push All")
 					.setWarning()
 					.onClick(async () => {
-						const count =
-							await this.plugin.syncEngine.pushAll();
-						new Notice(`Engram Sync: pushed ${count} files`);
+						try {
+							const count =
+								await this.plugin.syncEngine.pushAll();
+							new Notice(`Engram Sync: pushed ${count} files`);
+						} catch (e) {
+							new Notice(
+								`Engram Sync: ${e instanceof Error ? e.message : "push failed"}`,
+							);
+						}
 					}),
 			);
 	}
