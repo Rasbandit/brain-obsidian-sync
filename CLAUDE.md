@@ -1,7 +1,5 @@
 # CLAUDE.md
 
-> **Workspace:** For cross-project work, open `../engram-workspace/` instead. It provides unified context for both plugin and backend.
-
 Obsidian plugin for bidirectional sync with Engram. This is Phase 2 of the Engram project.
 
 ## Life OS
@@ -9,9 +7,13 @@ project: engram-obsidian-sync
 goal: income
 value: financial-freedom
 
+> **Multi-repo project.** This plugin is one half of Engram. For cross-project work (API changes, debugging plugin↔backend, deploy), open `../engram-workspace/` instead. See `../engram-workspace/docs/workspace-pattern.md` for when to use what.
+
 For plugin internals (class map, sync algorithm, API endpoints, type definitions), read `docs/internals.md`.
-For debugging and operations (logs, SSH, curl, CDP, infrastructure), read `docs/engram-ops.md`.
-For backend reference (all endpoints, pipelines, auth, config), read `../engram-workspace/docs/api-contract.md`.
+For CDP and Obsidian remote debugging (MCP devtools, evaluate_script), read `docs/engram-ops.md`.
+For server ops, infrastructure, and deployment, read `../engram-workspace/docs/deployment.md`.
+For backend REST API (all endpoints, pipelines, auth, config), read `../engram-workspace/docs/api-contract.md`.
+For cross-project debugging workflows, read `../engram-workspace/docs/debugging.md`.
 
 ## What This Plugin Does
 
@@ -32,6 +34,10 @@ A TypeScript sync client. It does NOT parse markdown, generate embeddings, or ta
 - Talk to Qdrant (Engram does this)
 - Perform search indexing (Engram does this — plugin provides the search UI via `POST /search`)
 - Manage auth/users (Engram does this)
+
+## Git Workflow
+
+Doc-only changes (CLAUDE.md, docs/) can be committed and pushed directly to main without asking. No branch needed.
 
 ## Testing
 
