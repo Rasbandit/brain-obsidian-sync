@@ -22,6 +22,16 @@ const HEALTH_CHECK_INTERVAL_MS = 30_000;
 /** Paths that are always ignored regardless of user settings. */
 const ALWAYS_IGNORED = [".obsidian/", ".trash/", ".git/"];
 
+/** Fast string hash (FNV-1a 32-bit). Not cryptographic — just for content change detection. */
+function fnv1a(s: string): number {
+	let h = 0x811c9dc5;
+	for (let i = 0; i < s.length; i++) {
+		h ^= s.charCodeAt(i);
+		h = Math.imul(h, 0x01000193);
+	}
+	return h >>> 0;
+}
+
 /** Binary file extensions that sync as attachments. */
 const BINARY_EXTENSIONS = new Set([
 	"png", "jpg", "jpeg", "gif", "bmp", "svg", "webp",
@@ -65,6 +75,12 @@ export class SyncEngine {
 	private rateLimitRPM: number = 0; // 0 = unlimited
 	private requestTimestamps: number[] = [];
 	readonly queue: OfflineQueue = new OfflineQueue();
+
+	/** Content hashes of files last written by the sync engine.
+	 *  Used to detect whether the user actually modified a file since
+	 *  the last sync (Obsidian sets mtime to "now" on vault.modify(),
+	 *  making mtime-based detection unreliable). */
+	private syncedHashes: Map<string, number> = new Map();
 
 	/** Called whenever sync status changes (for status bar updates). */
 	onStatusChange: ((status: SyncStatus) => void) | null = null;
@@ -376,6 +392,7 @@ export class SyncEngine {
 			} else {
 				const content = await this.app.vault.read(file);
 				await this.api.pushNote(file.path, content, mtime);
+				this.syncedHashes.set(normalizePath(file.path), fnv1a(content));
 			}
 			success = true;
 			devLog().log("push", `ok: ${file.path}`);
@@ -535,6 +552,7 @@ export class SyncEngine {
 			if (existing && existing instanceof TFile) {
 				await this.app.vault.trash(existing, true);
 				await this.removeEmptyFolders(normalized);
+				this.syncedHashes.delete(normalized);
 				return true;
 			}
 			return false;
@@ -543,22 +561,24 @@ export class SyncEngine {
 		// Create or update the file
 		const existing = this.app.vault.getAbstractFileByPath(normalized);
 		if (existing && existing instanceof TFile) {
-			// Conflict detection: both local and remote changed since last sync
-			const lastSyncSec = this.lastSync
-				? new Date(this.lastSync).getTime() / 1000
-				: 0;
-			const localMtime = existing.stat.mtime / 1000;
+			// Conflict detection — content-hash based.
+			// Mtime is unreliable because Obsidian sets it to "now" on every
+			// vault.modify(), so we track hashes of content we last wrote.
+			const localContent = await this.app.vault.read(existing);
+			const localHash = fnv1a(localContent);
+			const lastSyncedHash = this.syncedHashes.get(normalized);
 
-			if (localMtime > lastSyncSec && change.mtime > lastSyncSec && localMtime !== change.mtime) {
-				// Both sides modified — resolve conflict
-				const localContent = await this.app.vault.read(existing);
+			// Local was modified by the user if its content hash differs from
+			// what we last wrote during sync (or if we never wrote it).
+			const localModified = lastSyncedHash === undefined
+				? localContent !== change.content  // first sync: compare directly
+				: localHash !== lastSyncedHash;
 
-				// If content is identical, no real conflict
-				if (localContent === change.content) {
-					return false;
-				}
+			if (localModified && localContent !== change.content) {
+				// Both sides differ — real conflict
+				const localMtime = existing.stat.mtime / 1000;
 
-				devLog().log("pull", `conflict: ${change.path} (local=${localMtime.toFixed(0)} remote=${change.mtime.toFixed(0)})`);
+				devLog().log("pull", `conflict: ${change.path} (localHash=${localHash} syncedHash=${lastSyncedHash})`);
 				const resolution = await this.resolveConflict({
 					path: change.path,
 					localContent,
@@ -572,6 +592,7 @@ export class SyncEngine {
 				} else if (resolution.choice === "keep-local") {
 					// Push local version to server
 					await this.pushFile(existing);
+					this.syncedHashes.set(normalized, localHash);
 					return false;
 				} else if (resolution.choice === "keep-both") {
 					// Save remote as a conflict copy, keep local as-is
@@ -579,24 +600,30 @@ export class SyncEngine {
 					const baseName = normalized.replace(/\.md$/, "");
 					const conflictPath = `${baseName} (conflict ${date}).md`;
 					await this.createFileWithFolders(conflictPath, change.content);
+					this.syncedHashes.set(normalizePath(conflictPath), fnv1a(change.content));
 					return true;
 				} else if (resolution.choice === "merge" && resolution.mergedContent != null) {
 					// Apply user-merged content locally and push to server
 					await this.app.vault.modify(existing, resolution.mergedContent);
+					this.syncedHashes.set(normalized, fnv1a(resolution.mergedContent));
 					await this.pushFile(existing);
 					return true;
 				}
 				// "keep-remote" falls through to overwrite below
+			} else if (localContent === change.content) {
+				// Content identical — nothing to do
+				this.syncedHashes.set(normalized, localHash);
+				return false;
 			}
 
-			// Overwrite local with remote — conflict detection already passed,
-			// so apply unconditionally (Obsidian sets mtime to "now" on write,
-			// making mtime comparison unreliable here).
+			// Apply remote change (no conflict, or keep-remote chosen)
 			await this.app.vault.modify(existing, change.content);
+			this.syncedHashes.set(normalized, fnv1a(change.content));
 			return true;
 		} else {
 			// New file — create it
 			await this.createFileWithFolders(normalized, change.content);
+			this.syncedHashes.set(normalized, fnv1a(change.content));
 			return true;
 		}
 	}

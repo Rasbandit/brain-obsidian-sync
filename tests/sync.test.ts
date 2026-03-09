@@ -716,11 +716,18 @@ describe("SyncEngine conflict resolution", () => {
 
 	test("no conflict when only remote changed (local unchanged since lastSync)", async () => {
 		const engine = createEngine();
-		// Set lastSync AFTER local mtime so local is "unchanged"
-		engine.setLastSync("2024-04-01T00:00:00Z"); // 1711929600s, after localMtime
+		engine.setLastSync(LAST_SYNC);
 
-		const localFile = new TFile("Notes/Conflict.md", LOCAL_MTIME_MS); // before this lastSync
+		// First sync: establish the content hash by applying the initial version
+		const localFile = new TFile("Notes/Conflict.md", LOCAL_MTIME_MS);
 		(mockApp.vault.getAbstractFileByPath as jest.Mock).mockReturnValueOnce(localFile);
+		(mockApp.vault.read as jest.Mock).mockResolvedValueOnce("# Original version");
+		await engine.applyChange(makeChange({ content: "# Original version", mtime: REMOTE_MTIME }));
+
+		// Now a new remote change comes in, but local content hasn't changed
+		// (still matches the hash we stored from the first sync write)
+		(mockApp.vault.getAbstractFileByPath as jest.Mock).mockReturnValueOnce(localFile);
+		(mockApp.vault.read as jest.Mock).mockResolvedValueOnce("# Original version");
 
 		let conflictCalled = false;
 		engine.onConflict = async () => {
@@ -728,7 +735,7 @@ describe("SyncEngine conflict resolution", () => {
 			return { choice: "keep-remote" };
 		};
 
-		await engine.applyChange(makeChange({ mtime: 1711930000 })); // after this lastSync
+		await engine.applyChange(makeChange({ content: "# Updated remote", mtime: REMOTE_MTIME + 100 }));
 
 		expect(conflictCalled).toBe(false);
 		expect(mockApp.vault.modify).toHaveBeenCalled();
@@ -864,6 +871,36 @@ describe("SyncEngine conflict resolution", () => {
 
 		expect(conflictCalled).toBe(false);
 		expect(mockApp.vault.trash).toHaveBeenCalled();
+	});
+
+	test("no false conflict when remote appends to previously synced file", async () => {
+		const engine = createEngine();
+		engine.setLastSync(LAST_SYNC);
+
+		const localFile = new TFile("Notes/Conflict.md", LOCAL_MTIME_MS);
+
+		// First sync: pull initial content
+		(mockApp.vault.getAbstractFileByPath as jest.Mock).mockReturnValueOnce(localFile);
+		(mockApp.vault.read as jest.Mock).mockResolvedValueOnce("# Note\n\nOriginal");
+		await engine.applyChange(makeChange({ content: "# Note\n\nOriginal", mtime: REMOTE_MTIME }));
+
+		// Remote appends via MCP, local content is unchanged (Obsidian set mtime to "now")
+		(mockApp.vault.getAbstractFileByPath as jest.Mock).mockReturnValueOnce(localFile);
+		(mockApp.vault.read as jest.Mock).mockResolvedValueOnce("# Note\n\nOriginal");
+
+		let conflictCalled = false;
+		engine.onConflict = async () => {
+			conflictCalled = true;
+			return { choice: "keep-remote" };
+		};
+
+		await engine.applyChange(makeChange({
+			content: "# Note\n\nOriginal\n\nAppended line",
+			mtime: REMOTE_MTIME + 100,
+		}));
+
+		expect(conflictCalled).toBe(false);
+		expect(mockApp.vault.modify).toHaveBeenCalledWith(localFile, "# Note\n\nOriginal\n\nAppended line");
 	});
 });
 
