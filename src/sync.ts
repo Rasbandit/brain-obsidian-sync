@@ -7,6 +7,12 @@ import { AttachmentChange, EngramSyncSettings, ConflictChoice, ConflictInfo, Not
 import { OfflineQueue } from "./offline-queue";
 import { devLog } from "./dev-log";
 
+/** Check if an error is an HTTP response with the given status code.
+ *  Obsidian's requestUrl() throws objects with a `status` property on non-2xx. */
+function isHttpStatus(e: unknown, status: number): boolean {
+	return typeof e === "object" && e !== null && (e as { status?: number }).status === status;
+}
+
 /** How long (ms) after a push completes to suppress SSE echoes for that path. */
 const ECHO_COOLDOWN_MS = 5000;
 
@@ -217,6 +223,11 @@ export class SyncEngine {
 			}
 			this.goOnline();
 		} catch (e) {
+			// 404 means already deleted — treat as success
+			if (isHttpStatus(e, 404)) {
+				this.goOnline();
+				return;
+			}
 			console.error(`Engram Sync: failed to delete ${file.path}`, e);
 			await this.enqueueChange({
 				path: file.path,
@@ -247,16 +258,21 @@ export class SyncEngine {
 				}
 				this.goOnline();
 			} catch (e) {
-				console.error(
-					`Engram Sync: failed to delete old path ${oldPath}`,
-					e,
-				);
-				await this.enqueueChange({
-					path: oldPath,
-					action: "delete",
-					kind: isBinary ? "attachment" : "note",
-					timestamp: Date.now(),
-				});
+				// 404 means already deleted — treat as success
+				if (isHttpStatus(e, 404)) {
+					this.goOnline();
+				} else {
+					console.error(
+						`Engram Sync: failed to delete old path ${oldPath}`,
+						e,
+					);
+					await this.enqueueChange({
+						path: oldPath,
+						action: "delete",
+						kind: isBinary ? "attachment" : "note",
+						timestamp: Date.now(),
+					});
+				}
 			}
 		}
 
@@ -846,10 +862,15 @@ export class SyncEngine {
 			try {
 				await this.paceRequest();
 				if (entry.action === "delete") {
-					if (entry.kind === "attachment") {
-						await this.api.deleteAttachment(entry.path);
-					} else {
-						await this.api.deleteNote(entry.path);
+					try {
+						if (entry.kind === "attachment") {
+							await this.api.deleteAttachment(entry.path);
+						} else {
+							await this.api.deleteNote(entry.path);
+						}
+					} catch (e) {
+						// 404 means already deleted — dequeue and continue
+						if (!isHttpStatus(e, 404)) throw e;
 					}
 				} else if (entry.kind === "attachment") {
 					// Legacy entries may have content inline; new entries are content-free
