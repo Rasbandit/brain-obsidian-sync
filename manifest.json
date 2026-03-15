@@ -1,7 +1,7 @@
 {
   "id": "engram-sync",
   "name": "Engram Sync",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "minAppVersion": "1.0.0",
   "description": "Bidirectional sync with Engram — push notes for AI search, pull MCP-created notes back.",
   "author": "Rasbandit",
