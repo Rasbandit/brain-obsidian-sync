@@ -202,6 +202,9 @@ export class SyncEngine {
 		if (!this.ready) return;
 		if (!this.isSyncable(file)) return;
 		if (this.shouldIgnore(file.path)) return;
+		// Suppress vault events while a pull is in progress — all writes are
+		// from the sync engine, not the user.
+		if (this.pulling) return;
 
 		// Clear existing debounce timer for this file
 		const existing = this.debounceTimers.get(file.path);
@@ -391,8 +394,17 @@ export class SyncEngine {
 				await this.api.pushAttachment(file.path, base64, mimeType, mtime);
 			} else {
 				const content = await this.app.vault.read(file);
+				// Echo suppression — skip pushing if content matches what the
+				// sync engine last wrote (pull/SSE). Prevents the pull→push loop
+				// where vault.modify() triggers handleModify() for every pulled file.
+				const hash = fnv1a(content);
+				const syncedHash = this.syncedHashes.get(normalizePath(file.path));
+				if (syncedHash !== undefined && hash === syncedHash) {
+					devLog().log("push", `skip (echo): ${file.path}`);
+					return false;
+				}
 				await this.api.pushNote(file.path, content, mtime);
-				this.syncedHashes.set(normalizePath(file.path), fnv1a(content));
+				this.syncedHashes.set(normalizePath(file.path), hash);
 			}
 			success = true;
 			devLog().log("push", `ok: ${file.path}`);
